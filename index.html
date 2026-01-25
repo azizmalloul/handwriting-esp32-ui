@@ -148,8 +148,10 @@
   <div class="container">
     <h1>Commande manuscrite → ESP32</h1>
     <p class="subtitle">
-      Écris une commande sur papier, montre-la à la caméra, puis clique sur “Capturer &amp; Envoyer”.
-      (Ou utilise le champ texte pour tester sans OCR.)
+      <strong>Mode OCR :</strong> laisse le champ texte vide, écris ta commande sur papier et clique sur
+      “Capturer &amp; Envoyer”.<br />
+      <strong>Mode debug :</strong> si tu écris quelque chose dans le champ ci-dessous, c’est ce texte qui sera utilisé
+      (pas la caméra).
     </p>
 
     <video id="video" autoplay playsinline></video>
@@ -162,7 +164,7 @@
       <input
         id="debugText"
         type="text"
-        placeholder="Ex : allume la led verte pendant 3 secondes"
+        placeholder="(Laisser vide pour utiliser l’OCR) Ex : allume la led verte pendant 3 secondes"
       />
     </div>
 
@@ -173,7 +175,7 @@
 
     <div class="output">
       <p>
-        <span class="label">Texte reconnu :</span>
+        <span class="label">Texte reconnu / utilisé :</span>
         <span id="recognizedText" class="value">-</span>
       </p>
       <p>
@@ -239,15 +241,18 @@
 
       const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
       const debugText = debugInput.value.trim();
+      const usingDebug = debugText.length > 0;
 
       const payload = { image_base64: dataUrl };
-      if (debugText) {
+      if (usingDebug) {
         payload.debug_text = debugText;
       }
 
       recognizedSpan.textContent = '-';
       commandPre.textContent = '{}';
-      statusSpan.textContent = 'Envoi de la commande au backend…';
+      statusSpan.textContent = usingDebug
+        ? 'Mode debug : envoi du texte tapé au backend…'
+        : 'Mode OCR : envoi de l’image au backend…';
       statusSpan.className = 'value';
 
       try {
@@ -268,10 +273,17 @@
         recognizedSpan.textContent = result.recognized_text ?? '-';
         commandPre.textContent = JSON.stringify(result.command_json, null, 2);
 
-        statusSpan.textContent = result.sent_to_esp32
-          ? "Commande interprétée et envoyée à l’ESP32."
-          : "Texte reconnu, commande interprétée (envoi ESP32 pas encore implémenté).";
-        statusSpan.className = 'value status-ok';
+        if (result.sent_to_esp32) {
+          statusSpan.textContent = usingDebug
+            ? "Mode debug : commande interprétée et envoyée à l’ESP32."
+            : "Mode OCR : commande interprétée et envoyée à l’ESP32.";
+          statusSpan.className = 'value status-ok';
+        } else {
+          statusSpan.textContent = usingDebug
+            ? "Mode debug : commande interprétée mais non envoyée à l’ESP32 (action inconnue ou erreur)."
+            : "Mode OCR : commande interprétée mais non envoyée à l’ESP32 (action inconnue ou erreur).";
+          statusSpan.className = 'value status-error';
+        }
       } catch (err) {
         console.error(err);
         statusSpan.textContent = "Erreur lors de l'appel au backend.";
