@@ -18,7 +18,7 @@
 
     .container {
       width: 95%;
-      max-width: 880px;
+      max-width: 980px;
       background: #020617;
       border-radius: 16px;
       padding: 24px;
@@ -26,11 +26,7 @@
       border: 1px solid #1f2937;
     }
 
-    h1 {
-      text-align: center;
-      margin-bottom: 4px;
-    }
-
+    h1 { text-align: center; margin-bottom: 4px; }
     .subtitle {
       text-align: center;
       margin-top: 0;
@@ -39,10 +35,34 @@
       color: #9ca3af;
     }
 
-    video {
-      width: 100%;
+    .views {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    @media (max-width: 800px) {
+      .views { grid-template-columns: 1fr; }
+    }
+
+    .viewBox {
+      border: 1px solid #1f2937;
       border-radius: 12px;
       background: #111827;
+      overflow: hidden;
+    }
+
+    .viewTitle {
+      padding: 10px 12px;
+      border-bottom: 1px solid #1f2937;
+      font-size: 0.9rem;
+      color: #9ca3af;
+    }
+
+    video, canvas.preview {
+      width: 100%;
+      display: block;
+      background: #0b1220;
     }
 
     .controls {
@@ -62,20 +82,10 @@
       font-size: 0.95rem;
     }
 
-    #startCamera {
-      background: #22c55e;
-      color: #022c22;
-    }
+    #startCamera { background: #22c55e; color: #022c22; }
+    #capture { background: #0ea5e9; color: #082f49; }
 
-    #capture {
-      background: #0ea5e9;
-      color: #082f49;
-    }
-
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
 
     .output {
       margin-top: 18px;
@@ -84,26 +94,11 @@
       padding-top: 10px;
     }
 
-    .output p {
-      margin: 4px 0;
-    }
-
-    .label {
-      color: #9ca3af;
-    }
-
-    .value {
-      color: #e5e7eb;
-      font-weight: 500;
-    }
-
-    .status-ok {
-      color: #22c55e;
-    }
-
-    .status-error {
-      color: #f97373;
-    }
+    .output p { margin: 4px 0; }
+    .label { color: #9ca3af; }
+    .value { color: #e5e7eb; font-weight: 500; }
+    .status-ok { color: #22c55e; }
+    .status-error { color: #f97373; }
 
     pre {
       margin: 4px 0;
@@ -117,8 +112,21 @@
       white-space: pre-wrap;
       word-wrap: break-word;
     }
+
+    .hint {
+      margin-top: 10px;
+      font-size: 0.85rem;
+      color: #9ca3af;
+      text-align: center;
+    }
+
+    .mini {
+      font-size: 0.8rem;
+      color: #9ca3af;
+    }
   </style>
 </head>
+
 <body>
   <div class="container">
     <h1>Commande manuscrite → ESP32</h1>
@@ -126,8 +134,25 @@
       Écris une commande sur papier, montre-la à la caméra, puis clique sur “Capturer &amp; Envoyer”.
     </p>
 
-    <video id="video" autoplay playsinline></video>
-    <canvas id="canvas" style="display: none;"></canvas>
+    <div class="views">
+      <div class="viewBox">
+        <div class="viewTitle">Image caméra (normal)</div>
+        <video id="video" autoplay playsinline></video>
+      </div>
+
+      <div class="viewBox">
+        <div class="viewTitle">Vue OCR (noir &amp; blanc / seuillage temps réel)</div>
+        <canvas id="thCanvas" class="preview"></canvas>
+      </div>
+    </div>
+
+    <div class="hint">
+      Astuce : écris en GROS, en majuscules, et mets la feuille bien à plat + lumière forte.
+      <div class="mini">(La vue de droite montre un “seuillage” approximatif côté navigateur)</div>
+    </div>
+
+    <!-- Canvas caché pour capturer/envoyer -->
+    <canvas id="canvas" style="display:none;"></canvas>
 
     <div class="controls">
       <button id="startCamera">Activer la caméra</button>
@@ -139,9 +164,7 @@
         <span class="label">Texte reconnu :</span>
         <span id="recognizedText" class="value">-</span>
       </p>
-      <p>
-        <span class="label">Commande interprétée :</span>
-      </p>
+      <p><span class="label">Commande interprétée :</span></p>
       <pre id="commandJson">{}</pre>
       <p>
         <span class="label">Statut :</span>
@@ -152,7 +175,8 @@
 
   <script>
     const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
+    const canvas = document.getElementById('canvas');       // caché (capture backend)
+    const thCanvas = document.getElementById('thCanvas');   // visible (preview OCR)
     const startButton = document.getElementById('startCamera');
     const captureButton = document.getElementById('capture');
 
@@ -161,6 +185,97 @@
     const statusSpan = document.getElementById('statusText');
 
     let stream = null;
+    let previewRunning = false;
+
+    // ====== Preview settings ======
+    // On calcule la vue OCR sur une zone centrale (comme ton ROI backend)
+    const ROI = { x1: 0.10, x2: 0.90, y1: 0.10, y2: 0.90 };
+
+    // Taille max pour le traitement temps réel (évite de ramer)
+    const PREVIEW_MAX_W = 720;
+
+    function startPreviewLoop() {
+      if (previewRunning) return;
+      previewRunning = true;
+
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      const thCtx = thCanvas.getContext('2d', { willReadFrequently: true });
+
+      function loop() {
+        if (!previewRunning || !stream) return;
+
+        // Dimensions (on downscale pour la perf)
+        const vw = video.videoWidth || 640;
+        const vh = video.videoHeight || 480;
+
+        const scale = (vw > PREVIEW_MAX_W) ? (PREVIEW_MAX_W / vw) : 1;
+        const w = Math.floor(vw * scale);
+        const h = Math.floor(vh * scale);
+
+        if (w <= 0 || h <= 0) {
+          requestAnimationFrame(loop);
+          return;
+        }
+
+        // Canvas interne = frame downscale
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+
+        // ROI = ce qu'on affiche en "vue OCR"
+        const rx = Math.floor(w * ROI.x1);
+        const ry = Math.floor(h * ROI.y1);
+        const rw = Math.max(1, Math.floor(w * (ROI.x2 - ROI.x1)));
+        const rh = Math.max(1, Math.floor(h * (ROI.y2 - ROI.y1)));
+
+        // Canvas preview = taille ROI
+        if (thCanvas.width !== rw || thCanvas.height !== rh) {
+          thCanvas.width = rw;
+          thCanvas.height = rh;
+        }
+
+        // 1) draw frame
+        ctx.drawImage(video, 0, 0, w, h);
+
+        // 2) prendre pixels ROI
+        const img = ctx.getImageData(rx, ry, rw, rh);
+        const data = img.data;
+
+        // 3) Seuillage simple (rapide) : grayscale + threshold basé sur la moyenne
+        //    (on calcule une moyenne pour s'adapter un peu à la lumière)
+        let sum = 0;
+        const n = data.length / 4;
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i], g = data[i + 1], b = data[i + 2];
+          const gray = (0.299 * r + 0.587 * g + 0.114 * b);
+          sum += gray;
+        }
+        const mean = sum / n;
+
+        // threshold dynamique (tu peux ajuster si besoin)
+        // plus bas => image plus blanche (traits plus noirs)
+        const threshold = mean * 0.92;
+
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i], g = data[i + 1], b = data[i + 2];
+          const gray = (0.299 * r + 0.587 * g + 0.114 * b);
+          const v = (gray > threshold) ? 255 : 0;
+          data[i] = v; data[i + 1] = v; data[i + 2] = v; data[i + 3] = 255;
+        }
+
+        // 4) afficher en canvas
+        thCtx.putImageData(img, 0, 0);
+
+        requestAnimationFrame(loop);
+      }
+
+      requestAnimationFrame(loop);
+    }
+
+    function stopPreviewLoop() {
+      previewRunning = false;
+    }
 
     // Démarrer la caméra
     startButton.addEventListener('click', async () => {
@@ -169,9 +284,16 @@
           video: { facingMode: 'environment' },
         });
         video.srcObject = stream;
+
         statusSpan.textContent = 'Caméra active. Place le papier devant la caméra.';
         statusSpan.className = 'value status-ok';
         captureButton.disabled = false;
+
+        // attendre que la vidéo ait des dimensions avant de lancer la boucle
+        video.onloadedmetadata = () => {
+          startPreviewLoop();
+        };
+
       } catch (err) {
         console.error(err);
         statusSpan.textContent = 'Impossible d’accéder à la caméra.';
@@ -189,18 +311,17 @@
         return;
       }
 
-      const settings = stream.getVideoTracks()[0].getSettings();
-      const width = settings.width || video.videoWidth || 640;
-      const height = settings.height || video.videoHeight || 480;
+      // Capture FULL FRAME (meilleur pour ton backend: détection feuille + warp)
+      const vw = video.videoWidth || 640;
+      const vh = video.videoHeight || 480;
 
-      canvas.width = width;
-      canvas.height = height;
+      canvas.width = vw;
+      canvas.height = vh;
 
       const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, width, height);
+      ctx.drawImage(video, 0, 0, vw, vh);
 
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
       const payload = { image_base64: dataUrl };
 
       recognizedSpan.textContent = '-';
@@ -211,9 +332,7 @@
       try {
         const response = await fetch('http://localhost:8000/api/command', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
 
@@ -242,6 +361,12 @@
         statusSpan.className = 'value status-error';
       }
     }
+
+    // (optionnel) si tu veux stopper preview quand on quitte
+    window.addEventListener('beforeunload', () => {
+      stopPreviewLoop();
+      if (stream) stream.getTracks().forEach(t => t.stop());
+    });
   </script>
 </body>
 </html>
