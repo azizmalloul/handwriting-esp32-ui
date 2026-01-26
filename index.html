@@ -77,31 +77,6 @@
       cursor: not-allowed;
     }
 
-    .debug-input {
-      margin-top: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .debug-input label {
-      font-size: 0.9rem;
-      color: #9ca3af;
-    }
-
-    .debug-input input {
-      padding: 8px 10px;
-      border-radius: 999px;
-      border: 1px solid #374151;
-      background: #020617;
-      color: #e5e7eb;
-      outline: none;
-    }
-
-    .debug-input input:focus {
-      border-color: #22c55e;
-    }
-
     .output {
       margin-top: 18px;
       font-size: 0.9rem;
@@ -148,25 +123,11 @@
   <div class="container">
     <h1>Commande manuscrite → ESP32</h1>
     <p class="subtitle">
-      <strong>Mode OCR :</strong> laisse le champ texte vide, écris ta commande sur papier et clique sur
-      “Capturer &amp; Envoyer”.<br />
-      <strong>Mode debug :</strong> si tu écris quelque chose dans le champ ci-dessous, c’est ce texte qui sera utilisé
-      (pas la caméra).
+      Écris une commande sur papier, montre-la à la caméra, puis clique sur “Capturer &amp; Envoyer”.
     </p>
 
     <video id="video" autoplay playsinline></video>
     <canvas id="canvas" style="display: none;"></canvas>
-
-    <div class="debug-input">
-      <label for="debugText">
-        Commande (mode debug, sans OCR) :
-      </label>
-      <input
-        id="debugText"
-        type="text"
-        placeholder="(Laisser vide pour utiliser l’OCR) Ex : allume la led verte pendant 3 secondes"
-      />
-    </div>
 
     <div class="controls">
       <button id="startCamera">Activer la caméra</button>
@@ -175,7 +136,7 @@
 
     <div class="output">
       <p>
-        <span class="label">Texte reconnu / utilisé :</span>
+        <span class="label">Texte reconnu :</span>
         <span id="recognizedText" class="value">-</span>
       </p>
       <p>
@@ -194,7 +155,6 @@
     const canvas = document.getElementById('canvas');
     const startButton = document.getElementById('startCamera');
     const captureButton = document.getElementById('capture');
-    const debugInput = document.getElementById('debugText');
 
     const recognizedSpan = document.getElementById('recognizedText');
     const commandPre = document.getElementById('commandJson');
@@ -240,19 +200,12 @@
       ctx.drawImage(video, 0, 0, width, height);
 
       const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-      const debugText = debugInput.value.trim();
-      const usingDebug = debugText.length > 0;
 
       const payload = { image_base64: dataUrl };
-      if (usingDebug) {
-        payload.debug_text = debugText;
-      }
 
       recognizedSpan.textContent = '-';
       commandPre.textContent = '{}';
-      statusSpan.textContent = usingDebug
-        ? 'Mode debug : envoi du texte tapé au backend…'
-        : 'Mode OCR : envoi de l’image au backend…';
+      statusSpan.textContent = 'Envoi de la commande au backend…';
       statusSpan.className = 'value';
 
       try {
@@ -270,18 +223,17 @@
 
         const result = await response.json();
 
-        recognizedSpan.textContent = result.recognized_text ?? '-';
+        recognizedSpan.textContent = result.recognized_text || '(aucun texte reconnu)';
         commandPre.textContent = JSON.stringify(result.command_json, null, 2);
 
         if (result.sent_to_esp32) {
-          statusSpan.textContent = usingDebug
-            ? "Mode debug : commande interprétée et envoyée à l’ESP32."
-            : "Mode OCR : commande interprétée et envoyée à l’ESP32.";
+          statusSpan.textContent = "Commande interprétée et envoyée à l’ESP32.";
           statusSpan.className = 'value status-ok';
+        } else if (!result.recognized_text) {
+          statusSpan.textContent = "Mode OCR : aucun texte lisible sur l'image (action non envoyée).";
+          statusSpan.className = 'value status-error';
         } else {
-          statusSpan.textContent = usingDebug
-            ? "Mode debug : commande interprétée mais non envoyée à l’ESP32 (action inconnue ou erreur)."
-            : "Mode OCR : commande interprétée mais non envoyée à l’ESP32 (action inconnue ou erreur).";
+          statusSpan.textContent = "Mode OCR : commande interprétée mais non envoyée à l’ESP32 (action inconnue ou erreur).";
           statusSpan.className = 'value status-error';
         }
       } catch (err) {
