@@ -39,51 +39,86 @@
       color: #9ca3af;
     }
 
-    /* --- Zone vidéo + overlay --- */
+    /* ---------- Zone vidéo + overlay ---------- */
     .video-wrapper {
       position: relative;
       width: 100%;
+      max-height: 480px;
       border-radius: 12px;
-      overflow: hidden; /* pour que tout reste dans le cadre arrondi */
-      background: #111827;
+      overflow: hidden;
+      background: #020617;
+      border: 1px solid #1f2937;
     }
 
-    video {
+    video,
+    canvas,
+    #snapshot {
       width: 100%;
+      height: 100%;
       display: block;
+      object-fit: cover;
     }
 
-    #snapshot,
-    #waitOverlay {
-      position: absolute;
-      inset: 0;
-      border-radius: 12px;
+    canvas {
       display: none;
     }
 
     #snapshot {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
+      position: absolute;
+      inset: 0;
+      border-radius: 12px;
     }
 
-    #waitOverlay {
-      background: rgba(15, 23, 42, 0.97);
-      display: none;
+    .hidden {
+      display: none !important;
+    }
+
+    /* Overlay "Analyse en cours..." */
+    .video-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
       text-align: center;
-      padding: 20px;
-      font-size: 0.95rem;
+      padding: 24px;
+      background: radial-gradient(circle at top, rgba(56,189,248,0.10), transparent),
+                  rgba(15,23,42,0.96);
       color: #e5e7eb;
     }
 
-    #waitOverlay strong {
-      color: #38bdf8;
-      display: block;
-      margin-bottom: 8px;
-      font-size: 1rem;
+    .loader-circle {
+      width: 40px;
+      height: 40px;
+      border-radius: 999px;
+      border: 3px solid rgba(148,163,184,0.4);
+      border-top-color: #38bdf8;
+      margin-bottom: 14px;
+      animation: spin 1s linear infinite;
     }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .placeholder-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #38bdf8;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .placeholder-text {
+      max-width: 520px;
+      font-size: 0.98rem;
+      line-height: 1.6;
+      color: #cbd5f5;
+    }
+
+    /* ---------- Boutons & sortie ---------- */
 
     .controls {
       display: flex;
@@ -166,20 +201,23 @@
       Écris une commande sur papier, montre-la à la caméra, puis clique sur “Capturer &amp; Envoyer”.
     </p>
 
-    <!-- wrapper pour vidéo + image figée + message d'attente -->
     <div class="video-wrapper">
       <video id="video" autoplay playsinline></video>
-      <img id="snapshot" alt="Capture" />
-      <div id="waitOverlay">
-        <div>
-          <strong>Analyse en cours…</strong>
+      <canvas id="canvas"></canvas>
+
+      <!-- Image figée après capture -->
+      <img id="snapshot" class="hidden" alt="Dernière capture" />
+
+      <!-- Overlay affiché pendant l'analyse -->
+      <div id="videoPlaceholder" class="video-placeholder hidden">
+        <div class="loader-circle"></div>
+        <div class="placeholder-title">Analyse en cours…</div>
+        <div class="placeholder-text">
           Veuillez patienter quelques secondes le temps qu’EasyOCR lise votre texte,
           qu’un LLM prépare la commande JSON et que le backend l’envoie à l’ESP32.
         </div>
       </div>
     </div>
-
-    <canvas id="canvas" style="display: none;"></canvas>
 
     <div class="controls">
       <button id="startCamera">Activer la caméra</button>
@@ -208,15 +246,15 @@
     const startButton = document.getElementById('startCamera');
     const captureButton = document.getElementById('capture');
 
-    const snapshotImg = document.getElementById('snapshot');   // <-- image figée
-    const waitOverlay = document.getElementById('waitOverlay'); // <-- message attente
+    const snapshotImg = document.getElementById('snapshot');
+    const placeholder = document.getElementById('videoPlaceholder');
 
     const recognizedSpan = document.getElementById('recognizedText');
     const commandPre = document.getElementById('commandJson');
     const statusSpan = document.getElementById('statusText');
 
     let stream = null;
-    let waitTimer = null;  // <-- timer pour afficher le message après 4s
+    let waitTimer = null;
 
     // Démarrer la caméra
     startButton.addEventListener('click', async () => {
@@ -245,7 +283,7 @@
         return;
       }
 
-      captureButton.disabled = true; // éviter les doubles clics
+      captureButton.disabled = true;
 
       const settings = stream.getVideoTracks()[0].getSettings();
       const width = settings.width || video.videoWidth || 640;
@@ -258,30 +296,29 @@
       ctx.drawImage(video, 0, 0, width, height);
 
       const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-
       const payload = { image_base64: dataUrl };
 
-      // Reset affichage texte/JSON/statut
+      // Réinitialiser l'affichage texte / JSON / statut
       recognizedSpan.textContent = '-';
       commandPre.textContent = '{}';
       statusSpan.textContent = 'Capture effectuée, préparation de la commande…';
       statusSpan.className = 'value';
 
-      // 🔹 1) Afficher l’image figée
+      // 1) Afficher l'image figée
       snapshotImg.src = dataUrl;
-      snapshotImg.style.display = 'block';
-      waitOverlay.style.display = 'none';
-      video.style.opacity = 0; // on cache visuellement la vidéo, mais elle reste active
+      snapshotImg.classList.remove('hidden');
+      placeholder.classList.add('hidden');
+      video.style.opacity = 0; // on masque visuellement la vidéo
 
-      // 🔹 2) Programmer l’affichage du message d’attente dans 4s
+      // 2) Programmer l'affichage du message après 4s
       if (waitTimer) clearTimeout(waitTimer);
       waitTimer = setTimeout(() => {
-        snapshotImg.style.display = 'none';   // on enlève la photo
-        waitOverlay.style.display = 'flex';   // on affiche le texte d’attente
+        snapshotImg.classList.add('hidden');
+        placeholder.classList.remove('hidden');
       }, 4000);
 
       try {
-        // 🔹 On envoie immédiatement l'image au backend
+        // Envoi immédiat au backend
         const response = await fetch('http://localhost:8000/api/command', {
           method: 'POST',
           headers: {
@@ -314,14 +351,14 @@
         statusSpan.textContent = "Erreur lors de l'appel au backend.";
         statusSpan.className = 'value status-error';
       } finally {
-        // 🔹 3) Quand tout est terminé, on remet la caméra
+        // 3) Fin : retour au flux vidéo
         if (waitTimer) {
           clearTimeout(waitTimer);
           waitTimer = null;
         }
 
-        waitOverlay.style.display = 'none';
-        snapshotImg.style.display = 'none';
+        placeholder.classList.add('hidden');
+        snapshotImg.classList.add('hidden');
         video.style.opacity = 1;
 
         captureButton.disabled = false;
