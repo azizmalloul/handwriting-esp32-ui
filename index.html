@@ -50,6 +50,15 @@
       border: 1px solid #1f2937;
     }
 
+    /* vidéo et snapshot ont exactement le même comportement */
+    .video-wrapper video,
+    .video-wrapper img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 12px;
+    }
+
     video,
     canvas,
     #snapshot {
@@ -304,18 +313,19 @@
       statusSpan.textContent = 'Capture effectuée, préparation de la commande…';
       statusSpan.className = 'value';
 
-      // 1) Afficher l'image figée
+      // 1) Afficher l’image figée à la place de la vidéo
       snapshotImg.src = dataUrl;
       snapshotImg.classList.remove('hidden');
-      placeholder.classList.add('hidden');
-      video.style.opacity = 0; // on masque visuellement la vidéo
-
-      // 2) Programmer l'affichage du message après 4s
+      video.classList.add('hidden');
+      placeholder.classList.add('hidden'); // pas encore l’overlay
+      
+      // 2) Programmer l’affichage du message d’attente dans 4s
       if (waitTimer) clearTimeout(waitTimer);
       waitTimer = setTimeout(() => {
-        snapshotImg.classList.add('hidden');
-        placeholder.classList.remove('hidden');
+        snapshotImg.classList.add('hidden');     // on enlève la photo
+        placeholder.classList.remove('hidden');  // on affiche l’overlay
       }, 4000);
+      
 
       try {
         // Envoi immédiat au backend
@@ -351,18 +361,19 @@
         statusSpan.textContent = "Erreur lors de l'appel au backend.";
         statusSpan.className = 'value status-error';
       } finally {
-        // 3) Fin : retour au flux vidéo
         if (waitTimer) {
           clearTimeout(waitTimer);
           waitTimer = null;
         }
-
+      
+        // On enlève l’overlay et le snapshot, on remet la vidéo normale
         placeholder.classList.add('hidden');
         snapshotImg.classList.add('hidden');
-        video.style.opacity = 1;
-
+        video.classList.remove('hidden');
+      
         captureButton.disabled = false;
       }
+
     }
   </script>
 </body>
